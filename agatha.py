@@ -7,6 +7,7 @@ import random
 import os
 import time
 import sys
+import pickle
 
 # TODO
 # Enabled/Disabled flag
@@ -34,6 +35,8 @@ class Robot:
 		description = '''nice meme'''
 		self.token = config.get('Auth', 'DISCORD_TOKEN')
 		self.client = discord.Client()
+		logging.debug("Voice library loaded: " + str(discord.opus.is_loaded()))
+		#print(discord.opus.is_loaded())
 		###############################
 		#         Load Admins         #
 		###############################
@@ -50,25 +53,71 @@ class Robot:
 		self.validCmds = []
 		self.validCmds.append(Bomp("Bomp"))
 		self.validCmds.append(RollMod("RollMod"))
-		self.validCmds.append(Roll("Roll"))
+		#self.validCmds.append(Roll("Roll"))
 		self.validCmds.append(Command("Null"))
 		self.validCmds.append(OldRoll("OldRoll"))
 		self.validCmds.append(Shutdown("Shutdown"))
+		self.validCmds.append(Restart("Restart"))		
 		self.validCmds.append(Jade("Jade"))
 		self.validCmds.append(Egg("Egg"))
 		self.validCmds.append(Bird("Bird"))
-		self.validCmds.append(Pep("Pep"))
+		#self.validCmds.append(Pep("Pep"))
 		self.validCmds.append(Help("Help"))
+		self.validCmds.append(Pats("Pats"))
+		#self.validCmds.append(Test("Test"))
+
+		self.servDict = {}
 
 
 #TODO: Method to hold entirety of robot stuff
 #client runs in this method, and will check for @self.client.event things!
 #everything else can be in seperate methods!!
 	def robot(self):
+
+		@self.client.event
+		async def on_ready():
+			for x in self.client.servers:
+				#print(x.name, x.id)
+				try:
+					file = open(x.id + ".dat", 'rb')
+					self.servDict[x.id] = pickle.load(file)
+					logging.info("{0} data loaded from file.".format(x.name))
+					file.close()
+				except FileNotFoundError:
+					store = DataStore(x.name, x.id)
+					self.servDict[x.id] = store
+					file = (open(x.id+".dat", 'wb'))
+					logging.error("{0} data not found. Generating new store.".format(x.name))
+					pickle.dump(store, file)
+					file.close()
+			try:
+				file = open("DM.dat", 'rb')
+				self.servDict['DM'] = pickle.load(file)
+				logging.info("DM data loaded from file.")
+				file.close()
+			except FileNotFoundError:
+				store = DataStore("DM", "DM")
+				self.servDict['DM'] = store
+				logging.error("DM data not found. Generating new store.")
+				file = open("DM.dat", 'wb')
+				pickle.dump(store, file)
+				file.close()
+
+			logging.info("ready for action!")
+			logging.info(self.servDict.keys())
+
 		@self.client.event
 		async def on_message(message):
 			commcount = 0
-			logging.info("[{0}] {1}: {2}".format(message.channel, message.author, message.content))
+			server = message.server
+			servname = ""
+			if(server == None):
+				servname = "DM"
+				datastore = self.servDict["DM"]
+			else:
+				servname = server.name
+				datastore = self.servDict[server.id]
+			logging.info("[{0}, {1}] {2}: {3}".format(servname, message.channel, message.author, message.content))
 			if not message.channel.is_private:
 				if message.author.bot == True or message.author.id in self.gaybabyjail or message.channel.id in self.banlist:
 					return
@@ -79,11 +128,7 @@ class Robot:
 				token = msg[i]
 				if token.startswith('!'):
 					token = token[1:].lower()
-					command = None
-					try:
-						command = next(x for x in self.validCmds if x.name.lower() == token)
-					except StopIteration:
-						logging.info("Command not found: {0}".format(token))
+					command = self.getCommand(token)
 
 					if command is not None and commcount < 4:
 						commcount = commcount + 1
@@ -100,7 +145,7 @@ class Robot:
 							data = []
 						await self.client.send_typing(message.channel)
 						await asyncio.sleep(.5)
-						await command.runCommand(self.client, message.channel,data, message.author)
+						await command.runCommand(self.client, message, data, datastore, token)
 					if commcount >= 4 and message.author.id not in self.babyjail and message.author.id not in self.admins:
 						await self.client.send_message(message.channel, message.author.mention + ": Please refrain from excessive commands. This is your only warning.")
 						self.babyjail.append(message.author.id)
@@ -114,14 +159,35 @@ class Robot:
 
 		self.client.run(self.token)
 
+	def getCommand(self, token):
+		for x in self.validCmds:
+			for y in x.commands:
+				if (token == y.lower()):
+					logging.info("Command found: {0} (Using {1})".format(x.name, y))
+					return x
+		logging.info("Command not found: " + token)
+		return None
+
+class DataStore:
+	def __init__(self, servname, servid):
+		self.test = "lol"
+		self.name = servname
+		self.servid = servid
+		self.jade = 0
+		self.jadecd = 0
+		self.bomp = 0
+		self.bird = 0
+
 class Command:
 	def __init__(self, name):
 		global config
 		self.name = name
+		self.commands = []
 		self.description = "No description!"
 		self.help = "Help not set up!"
 		self.size = 0
 		try:
+			self.commands = config.get(name, 'Commands').splitlines()
 			self.description = config.get(name, 'Description')
 			self.help = config.get(name, 'Help')
 			self.size = config.getint(name, 'Size')
@@ -130,29 +196,27 @@ class Command:
 			logging.error("[{0}] Failed reading config in setup".format(self.name))
 			logging.error("[{0}]: {1}".format(self.name, str(e)))
 
-	async def runCommand(self, client, channel, data, user):
+	#async def runCommand(self, client, channel, data, user):
+	async def runCommand(self, client, message, data, datastore, token):
 		logging.warning(self.name + ": runCommand not overriden!")
 		return
 
 class Bomp(Command):
 	def __init__(self, name):
 		super().__init__(name)
-		self.filename = config.get(name, 'Filename')
-		file = open(self.filename, 'r')
-		self.bompcount = int(file.read())
-		file.close()
-		logging.info("[Bomp] Bompcount = " + str(self.bompcount))
 		self.specialBomp = config.get(self.name, 'SpecialBomp').splitlines()
-	async def runCommand(self, client, channel, data, user):
+	async def runCommand(self, client, message, data, datastore, token):
+		self.bompcount = datastore.bomp
+		channel = message.channel
 		if(random.randint(0, 150) < self.bompcount):
 			logging.info("[{0}] Special bomp!")
-			self.bompcount = 0
+			datastore.bomp = 0
 			await client.send_message(channel,random.choice(self.specialBomp))
 		else:
-			self.bompcount = self.bompcount + 1
-			logging.info("[Bomp] Bompcount = " + str(self.bompcount))
-			file = open(self.filename, 'w')
-			file.write(str(self.bompcount))
+			datastore.bomp = self.bompcount + 1
+			logging.info("[{0} Bomp] Bompcount = {1}".format(datastore.name, datastore.bomp))
+			file = open(datastore.servid + ".dat", 'wb')
+			pickle.dump(datastore, file)
 			file.close()
 			await client.send_message(channel, 'bomp')
 		return
@@ -160,25 +224,21 @@ class Bomp(Command):
 class Jade(Command):
 	def __init__(self, name):
 		super().__init__(name)
-		self.filename = config.get(name, 'Filename')
 		self.cooldown = config.getint(name, 'Cooldown')
-		file = open(self.filename, 'r')
-		self.jadecount = int(file.read())
-		file.close()
-		logging.info("[Jade] LARGE MAN = " + str(self.jadecount))
-		self.last = 0
 
-	async def runCommand(self, client, channel, data, user):
-		if (time.time() - self.last) < self.cooldown:
+	async def runCommand(self, client, message, data, datastore, token):
+		channel = message.channel
+		if (time.time() - datastore.jadecd) < self.cooldown:
 			logging.info("[Jade] Currently on cooldown!")
+			await client.send_message(channel, "ME HUNGRY! YOU YUMMY!")
 			return
-		self.jadecount = self.jadecount + 1
-		logging.info("[Jade] LARGE MAN = " + str(self.jadecount))
-		file = open(self.filename, 'w')
-		file.write(str(self.jadecount))
+		datastore.jade = datastore.jade + 1
+		logging.info("[{0} Jade] LARGE MAN = {1}".format(datastore.name, datastore.jade))
+		await client.send_message(channel,"I SUMMON A {0}/{0} LARGE MAN <:malfshades:360804944372170752>".format(datastore.jade))
+		datastore.jadecd = time.time()
+		file = open(datastore.servid + ".dat", 'wb')
+		pickle.dump(datastore, file)
 		file.close()
-		await client.send_message(channel,"I SUMMON A {0}/{0} LARGE MAN <:malfshades:360804944372170752>".format(self.jadecount))
-		self.last = time.time()
 		return
 
 class RollMod(Command):
@@ -191,7 +251,9 @@ class RollMod(Command):
 		self.zeroSidedErr = config.get(self.name, 'ZeroSidedErr')
 		self.tooLargeErr = config.get(self.name, 'TooLargeErr')
 		self.onlyArithErr = config.get(self.name, 'OnlyArithErr')
-	async def runCommand(self, client, channel, data, user):
+	#async def runCommand(self, client, channel, data, user):
+	async def runCommand(self, client, message, data, datastore, token):
+		channel = message.channel
 		logging.info("[{0}] Request from {1}, data = {2}".format(self.name, channel, data))
 
 		equation = []
@@ -348,7 +410,9 @@ class OldRoll(Command):
 		self.polyhedral = [4,6,8,10,12,20]
 		self.polysass = config.get(self.name, 'PolySass')
 		self.toolargearray = config.get(self.name, 'TooLargeArray').splitlines()
-	async def runCommand(self, client, channel, data, user):
+	#async def runCommand(self, client, channel, data, user):
+	async def runCommand(self, client, message, data, datastore, token):
+		channel = message.channel
 		logging.info("[{0}] Request from {1}, data = {2}".format(self.name, channel, data))
 		reason = ""
 		out = []
@@ -409,28 +473,14 @@ class OldRoll(Command):
 			logging.warning("[{0}] Error with rolling dice. boop.".format(self.name))
 			raise
 
-class Roll(Command):
-	def __init__(self, name):
-		super().__init__(name)
-		self.redirect = None
-	async def runCommand(self, client, channel, data, user):
-		if not self.redirect:
-			logging.info("[{0}] Redirect not found, attempting to create".format(self.name))
-			try:
-				self.redirect = next(x for x in agatha.validCmds if x.name == "RollMod")
-			except:
-				logging.error("[{0}] Could not find RollMod class! Is it enabled?".format(self.name))
-				agatha.validCmds.remove(self)
-				return
-		logging.info("[{0}] Redirecting to {1}".format(self.name, self.redirect.name))
-		await self.redirect.runCommand(client, channel, data, user)
-		return
-
 class Shutdown(Command):
 	def __init__(self,name):
 		super().__init__(name)
 		self.admins = config.get("Settings","Admins").splitlines()
-	async def runCommand(self, client, channel, data, user):
+	#async def runCommand(self, client, channel, data, user):
+	async def runCommand(self, client, message, data, datastore, token):
+		channel = message.channel
+		user = message.author
 		if (user.id not in self.admins):
 			await client.send_message(channel, self.help)
 			return
@@ -439,8 +489,26 @@ class Shutdown(Command):
 			await client.logout()
 			sys.exit(0)
 
+class Restart(Command):
+	def __init__(self,name):
+		super().__init__(name)
+		self.admins = config.get("Settings","Admins").splitlines()
+	#async def runCommand(self, client, channel, data, user):
+	async def runCommand(self, client, message, data, datastore, token):
+		channel = message.channel
+		user = message.author
+		if (user.id not in self.admins):
+			await client.send_message(channel, self.help)
+			return
+		else:
+			await client.send_message(channel, "Restarting, brb.")
+			await client.logout()
+			sys.exit("Restarting.")
+
 class Egg(Command):
-	async def runCommand(self, client, channel, data, user):
+	#async def runCommand(self, client, channel, data, user):
+	async def runCommand(self, client, message, data, datastore, token):
+		channel = message.channel
 		#em = discord.Embed(title='Wow!', description='This is something!', colour=0x800000)
 		#em.set_author(name=user.display_name, icon_url=user.avatar_url)
 		#em.set_footer(text="This is a footer!", icon_url=client.user.avatar_url)
@@ -450,71 +518,106 @@ class Egg(Command):
 		#field2.add_field(name="field 3", value="this is dumb", inline=True)
 		#msg = await client.send_message(channel, embed=em)
 
-		rlist = []
-		for i in user.roles:
-			rlist.append((i.name, i.position, i.id))
+		#rlist = []
+		#for i in user.roles:
+		#	rlist.append((i.name, i.position, i.id))
 
-		em2 = discord.Embed(title='A mystery!')
+		#em2 = discord.Embed(title='A mystery!')
 		#em2.add_field(name="Roles", value=rlist)
-		field = em2.add_field(name="(っ◔◡◔)っ", value="(っ◔◡◔)っ", inline=True)
+		#field = em2.add_field(name="(っ◔◡◔)っ", value="(っ◔◡◔)っ", inline=True)
 		#field = field.add_field(name="2", value=2, inline=True)
 		#field = field.add_field(name="3", value=3, inline=True)
 		#field = field.add_field(name="4", value=4, inline=True)
-		em2.set_footer(text="You're not supposed to see this yet", icon_url=client.user.avatar_url)
-		msg = await client.send_message(channel, embed=em2)
-		#msg = await client.send_message(channel, "Egg")
-		#await client.add_reaction(msg, "\U0001F38A")
+		#em2.set_footer(text="You're not supposed to see this yet", icon_url=client.user.avatar_url)
+		#msg = await client.send_message(channel, embed=em2)
+		chan = client.get_channel("413536317822205962")
+		if not(client.is_voice_connected(chan.server)):
+			try:
+				v = await client.join_voice_channel(chan)
+			except:
+				pass
+		msg = await client.send_message(channel, "Egg")
+		await client.add_reaction(msg, "\U0001F38A")
 
 class Bird(Command):
 	def __init__(self, name):
 		super().__init__(name)
 		self.notreadyarray = config.get(self.name, 'NotReadyArray').splitlines()
-		self.lastpic = 0
 		self.cooldown = config.getint(name, 'Cooldown')
-	async def runCommand(self, client, channel, data, user):
-		sinceLast = time.time() - self.lastpic
+	#async def runCommand(self, client, channel, data, user):
+	async def runCommand(self, client, message, data, datastore, token):
+		channel = message.channel
+		sinceLast = time.time() - datastore.bird
 		if sinceLast < self.cooldown:
-			logging.info('[{0}] Bird picture on cooldown!'.format(self.name))
+			logging.info('[{0} {1}] Bird picture on cooldown!'.format(datastore.name, self.name))
 			await client.send_message(channel, "{0}\nAbout {1} seconds left.".format(random.choice(self.notreadyarray), int(self.cooldown - sinceLast)))
 			return
 		else:
+			datastore.bird = time.time()
 			file = "pictures/" + random.choice(os.listdir("pictures"))
 			await client.send_file(channel, file, filename="pep"+os.path.splitext(file)[1], content="<:loaf:359002158483636224>")
 			logging.info('[{0}] {1} sent!'.format(self.name, file))
-			self.lastpic = time.time()
 			return
 
-class Pep(Command):
-	def __init__(self, name):
-		super().__init__(name)
-		self.redirect = None
-	async def runCommand(self, client, channel, data, id):
-		if not self.redirect:
-			logging.info("[{0}] Redirect not found, attempting to create".format(self.name))
-			try:
-				self.redirect = next(x for x in agatha.validCmds if x.name == "Bird")
-			except:
-				logging.error("[{0}] Could not find bird class! Is it enabled?".format(self.name))
-				agatha.validCmds.remove(self)
-				return
-		logging.info("[{0}] Redirecting to {1}".format(self.name, self.redirect.name))
-		await self.redirect.runCommand(client, channel, data, user)
-		return
-
 class Help(Command):
-	async def runCommand(self, client, channel, data, user):
-		try:
-			helpstr = next(x for x in agatha.validCmds if x.name.lower() == data[0].lower()).help
-		except:
-			logging.info("[{0}] Command not found.".format(self.name))
-			helpstr = "The following commands are enabled:\n"
-			for i in agatha.validCmds:
-				helpstr = helpstr + "{0}: {1}\n".format(i.name, i.help)
+	#async def runCommand(self, client, channel, data, user):
+	async def runCommand(self, client, message, data, datastore, token):
+		channel = message.channel
+		helpstr = ""
+		request = len(data) > 0
+		for x in agatha.validCmds:
+			for y in x.commands:
+				if request:
+					if (data[0].lower() == y.lower()):
+						await client.send_message(channel, x.help)
+						return
+			temp = ("**" + i + "**" for i in x.commands)
+			helpstr = helpstr + "{0}: {1}\n".format(", ".join(temp), x.help) 
+		#maybe make this a setting
+		helpstr = helpstr + "Agatha **v2.0** Made by <:magic:408512869764694030> <@85107142603833344> <:magic:408512869764694030>\n"
+		helpstr = helpstr + "http://www.kiddcommander.com"
 		await client.send_message(channel, helpstr)
 
+class Pats(Command):
+	def __init__(self, name):
+		super().__init__(name)
+		self.patsarray = config.get(self.name, 'PatsArray').splitlines()
+	async def runCommand(self, client, message, data, datastore, token):
+		emote = None
+		if token == "blobpats":
+			emote = self.patsarray[0]
+		elif token == "catpats":
+			emote = self.patsarray[1]
+		elif token == "dragonpats":
+			emote = self.patsarray[2]
+		else:
+			emote = random.choice(self.patsarray)
+			logging.info('[{0}] {1} requested pats.'.format(self.name, message.author))
+		#await client.add_reaction(message, emote[1:-1])
+		await client.send_message(message.channel, message.author.mention + " " + emote)
+
+class Test(Command):
+	async def runCommand(self, client, message, data, datastore, token):
+		#for x in client.servers:
+		#	await client.send_message(message.channel, x.id)
+		#for x in client.private_channels:
+		#	await client.send_message(message.channel, x.id + " " + str(x.is_private))
+		#	for y in x.recipients:
+		#		await client.send_message(message.channel, y.name)
+		#await client.send_message(message.channel, client.servers)
+		await client.send_message(message.channel, "{0}\n{1}\n{2}\n{3}\n{4}".format(datastore.name, datastore.servid, datastore.bomp, datastore.jade, datastore.bird))
+		chan = client.get_channel("413536317822205962")
+		if not(client.is_voice_connected(chan.server)):
+			try:
+				v = await client.join_voice_channel(chan)
+			except:
+				pass
+			#p = await v.create_ytdl_player('https://www.youtube.com/watch?v=yD2FSwTy2lw')
+			#p.start()
 
 
 
+		
 
 class SingleOpError(ValueError):
 	'''raise this when there's only a single operator'''
